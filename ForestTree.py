@@ -136,19 +136,18 @@ class ForestTree:
         return impurity
 
     # Расчет прироста
-    def __gain(self, left_data, right_data, left_labels, right_labels, root_gini):
+    def __gain(self, left_labels, right_labels, root_gini):
+        p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
         if self.classes_or_values:
             if self.gini_or_shenon:
-                p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
                 return root_gini - p * self.__gini(left_labels) - (1 - p) * self.__gini(right_labels)
             else:
-                p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
                 return root_gini - p * self.__entropy(left_labels) - (1 - p) * self.__entropy(right_labels)
         else:
             if self.metric_name == 'mse':
-                return root_gini - self.__mse(left_data, left_labels) - self.__mse(right_data, right_labels)
+                return root_gini - p * self.__mse_targets(left_labels) - (1 - p) * self.__mse_targets(right_labels)
             else:
-                return root_gini - self.__mae(left_data, left_labels) - self.__mae(right_data, right_labels)
+                return root_gini - p * self.__mae_targets(left_labels) - (1 - p) * self.__mae_targets( right_labels)
 
     def __split(self, data, labels, column_index, t):
 
@@ -197,6 +196,10 @@ class ForestTree:
 
         return subsample
 
+    def __mse_targets(self, labels):
+        return np.mean((labels - labels.mean())**2)
+    def __mae_targets(self, labels):
+        return np.mean(np.abs(labels - labels.mean()))
     def __find_best_split(self, data, labels):
         if self.classes_or_values:
             if self.gini_or_shenon:
@@ -205,9 +208,9 @@ class ForestTree:
                 root_gini = self.__entropy(labels)
         else:
             if self.metric_name == 'mse':
-                root_gini = self.__mse(data, labels)
+                root_gini = self.__mse_targets(labels)
             else:
-                root_gini = self.__mae(data, labels)
+                root_gini = self.__mae_targets(labels)
         best_gain = 0
         best_t = None
         best_index = None
@@ -221,7 +224,7 @@ class ForestTree:
                 if len(true_data) < self.min_samples_leaf or len(false_data) < self.min_samples_leaf:
                     continue
 
-                current_gain = self.__gain(true_data, false_data, true_labels, false_labels, root_gini)
+                current_gain = self.__gain(true_labels, false_labels, root_gini)
                 if current_gain > best_gain:
                     best_gain, best_t, best_index = current_gain, t, index
 
