@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import functools
+import math
 from matplotlib.colors import ListedColormap
 
 
@@ -44,9 +45,13 @@ class Leaf:
 
 
 class Tree:
-    def __init__(self, X, Y, min_samples_leaf=1, max_tree_depth=None):
+    def __init__(self, X, Y, min_samples_leaf=1, max_tree_depth=None, classes_or_values=True,
+                 gini_or_shenon=True, metric_name='mse'):
         self.X = X
         self.Y = Y
+        self.classes_or_values = classes_or_values
+        self.metric_name = metric_name
+        self.gini_or_shenon = gini_or_shenon
         # Ограничение минимального количества n объектов в листе.
         self.min_samples_leaf = min_samples_leaf
         # Ограничение максимальной глубины дерева.
@@ -93,7 +98,22 @@ class Tree:
         return self.X_train, self.X_test, self.Y_train, self.Y_test
 
     # Расчет критерия Джини
-    def gini(self, labels):
+    def __entropy(self, labels):
+
+        classes = {}
+        for label in labels:
+            if label not in classes:
+                classes[label] = 0
+            classes[label] += 1
+        impurity = 0
+        for label in classes:
+            p = classes[label] / len(labels)
+            if p != 0:
+                impurity += p * math.log2(p)
+        return -impurity
+
+    # Расчет критерия Джини
+    def __gini(self, labels):
         classes = {}
         for label in labels:
             if label not in classes:
@@ -104,13 +124,28 @@ class Tree:
         for label in classes:
             p = classes[label] / len(labels)
             impurity -= p ** 2
-
         return impurity
 
+    def __mse(self, actual, predicted):
+        return (np.sum((actual - predicted) ** 2)) / len(actual)
+
+    def __mae(self, actual, predicted):
+        return np.mean(np.abs(actual - predicted))
+
     # Расчет прироста
-    def gain(self, left_labels, right_labels, root_gini):
-        p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
-        return root_gini - p * self.gini(left_labels) - (1 - p) * self.gini(right_labels)
+    def gain(self, left_data, right_data, left_labels, right_labels, root_gini):
+        if self.classes_or_values:
+            if self.gini_or_shenon:
+                p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
+                return root_gini - p * self.__gini(left_labels) - (1 - p) * self.__gini(right_labels)
+            else:
+                p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
+                return root_gini - p * self.__entropy(left_labels) - (1 - p) * self.__entropy(right_labels)
+        else:
+            if self.metric_name == 'mse':
+                return root_gini - self.__mse(left_data, left_labels) - self.__mse(right_data, right_labels)
+            else:
+                return root_gini - self.__mae(left_data, left_labels) - self.__mae(right_data, right_labels)
 
     def split(self, data, labels, column_index, t):
 
@@ -126,7 +161,16 @@ class Tree:
         return true_data, false_data, true_labels, false_labels
 
     def find_best_split(self, data, labels):
-        root_gini = self.gini(labels)
+        if self.classes_or_values:
+            if self.gini_or_shenon:
+                root_gini = self.__gini(labels)
+            else:
+                root_gini = self.__entropy(labels)
+        else:
+            if self.metric_name == 'mse':
+                root_gini = self.__mse(data, labels)
+            else:
+                root_gini = self.__mae(data, labels)
 
         best_gain = 0
         best_t = None
@@ -142,7 +186,7 @@ class Tree:
                 if len(true_data) < self.min_samples_leaf or len(false_data) < self.min_samples_leaf:
                     continue
 
-                current_gain = self.gain(true_labels, false_labels, root_gini)
+                current_gain = self.gain(true_data, false_data, true_labels, false_labels, root_gini)
 
                 if current_gain > best_gain:
                     best_gain, best_t, best_index = current_gain, t, index

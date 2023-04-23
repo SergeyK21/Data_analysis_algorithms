@@ -42,11 +42,14 @@ class Leaf:
 
 
 class ForestTree:
-    def __init__(self, X, Y, N=3, classes_or_values=True, len_sample=None, min_samples_leaf=1, max_tree_depth=None):
+    def __init__(self, X, Y, N=3, classes_or_values=True, gini_or_shenon=True, len_sample=None, min_samples_leaf=1,
+                 max_tree_depth=None, metric_name='mse'):
         self.X = X
         self.Y = Y
         self.N = N
         self.classes_or_values = classes_or_values
+        self.gini_or_shenon = gini_or_shenon
+        self.metric_name = metric_name
 
         if len_sample == None and classes_or_values:
             self.len_sample = int(math.sqrt(self.X.shape[1]))
@@ -104,6 +107,20 @@ class ForestTree:
 
         return self.X_train, self.X_test, self.Y_train, self.Y_test
 
+    def __entropy(self, labels):
+
+        classes = {}
+        for label in labels:
+            if label not in classes:
+                classes[label] = 0
+            classes[label] += 1
+        impurity = 0
+        for label in classes:
+            p = classes[label] / len(labels)
+            if p != 0:
+                impurity += p * math.log2(p)
+        return -impurity
+
     # Расчет критерия Джини
     def __gini(self, labels):
         classes = {}
@@ -119,9 +136,19 @@ class ForestTree:
         return impurity
 
     # Расчет прироста
-    def __gain(self, left_labels, right_labels, root_gini):
-        p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
-        return root_gini - p * self.__gini(left_labels) - (1 - p) * self.__gini(right_labels)
+    def __gain(self, left_data, right_data, left_labels, right_labels, root_gini):
+        if self.classes_or_values:
+            if self.gini_or_shenon:
+                p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
+                return root_gini - p * self.__gini(left_labels) - (1 - p) * self.__gini(right_labels)
+            else:
+                p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
+                return root_gini - p * self.__entropy(left_labels) - (1 - p) * self.__entropy(right_labels)
+        else:
+            if self.metric_name == 'mse':
+                return root_gini - self.__mse(left_data, left_labels) - self.__mse(right_data, right_labels)
+            else:
+                return root_gini - self.__mae(left_data, left_labels) - self.__mae(right_data, right_labels)
 
     def __split(self, data, labels, column_index, t):
 
@@ -171,8 +198,16 @@ class ForestTree:
         return subsample
 
     def __find_best_split(self, data, labels):
-
-        root_gini = self.__gini(labels)
+        if self.classes_or_values:
+            if self.gini_or_shenon:
+                root_gini = self.__gini(labels)
+            else:
+                root_gini = self.__entropy(labels)
+        else:
+            if self.metric_name == 'mse':
+                root_gini = self.__mse(data, labels)
+            else:
+                root_gini = self.__mae(data, labels)
         best_gain = 0
         best_t = None
         best_index = None
@@ -186,7 +221,7 @@ class ForestTree:
                 if len(true_data) < self.min_samples_leaf or len(false_data) < self.min_samples_leaf:
                     continue
 
-                current_gain = self.__gain(true_labels, false_labels, root_gini)
+                current_gain = self.__gain(true_data, false_data, true_labels, false_labels, root_gini)
                 if current_gain > best_gain:
                     best_gain, best_t, best_index = current_gain, t, index
 
@@ -210,16 +245,19 @@ class ForestTree:
 
         return Node(index, t, true_branch, false_branch)
 
-    def fit(self, data=None, labels=None, n_trees=None, len_sample=None, classes_or_values=None, metric_name='mse'):
-        if data == None:
-            data = self.X
-        else:
+    def fit(self, data=None, labels=None, n_trees=None, len_sample=None, classes_or_values=None,
+            gini_or_shenon=None, metric_name='mse'):
+        try:
+            if data == None:
+                data = self.X
+        except ValueError:
             self.X = data
 
-        if labels == None:
-            labels = self.Y
-        else:
-            self.y = labels
+        try:
+            if labels == None:
+                labels = self.Y
+        except ValueError:
+            self.Y = labels
 
         if n_trees == None:
             n_trees = self.N
@@ -228,7 +266,8 @@ class ForestTree:
 
         if classes_or_values != None:
             self.classes_or_values = classes_or_values
-
+        if gini_or_shenon != None:
+            self.gini_or_shenon = gini_or_shenon
 
         if len_sample != None and self.X.shape[1] < len_sample:
             self.len_sample = self.X.shape[1]
@@ -379,9 +418,12 @@ if __name__ == '__main__':
                             min_samples_leaf=min_samples_leaf, max_tree_depth=max_tree_depth)
 
     # print(foresttree.test_list)
-    print(foresttree.fit()[1])
-
-    print(type(foresttree.predict(data)))
+    print(
+        foresttree.fit(data=data, labels=labels, n_trees=3, classes_or_values=True, len_sample=2, gini_or_shenon=True)[
+            1])
+    print(
+        foresttree.fit(data=data, labels=labels, n_trees=3, classes_or_values=True, len_sample=2, gini_or_shenon=False)[
+            1])
 
     # from sklearn.ensemble import RandomForestClassifier
     #
