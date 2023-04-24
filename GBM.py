@@ -273,20 +273,18 @@ class Tree:
 
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             error_test = self.__accuracy_metric(self.Y, y_test_pred)
-        elif self.criterion_name == 'mse':
-            error_test = self.__accuracy_metric_mse(self.Y, y_test_pred)
         else:
-            error_test = self.__accuracy_metric_mse(self.Y, y_test_pred)
+            error_test = 1 - (np.sum((self.Y_test - y_test_pred) ** 2) / self.Y_test.shape[0]) \
+                         / (np.sum((self.Y_test - np.mean(self.Y_test)) ** 2) / self.Y_test.shape[0])
 
         self.fit(self.X_train, self.Y_train)
         y_train_pred = self.predict(self.X_train)
 
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             error_train = self.__accuracy_metric(self.Y, y_train_pred)
-        elif self.criterion_name == 'mse':
-            error_train = self.__accuracy_metric_mse(self.Y, y_train_pred)
         else:
-            error_train = self.__accuracy_metric_mse(self.Y, y_train_pred)
+            error_test = 1 - (np.sum((self.Y_train - y_train_pred) ** 2) / self.Y_train.shape[0]) \
+                         / (np.sum((self.Y_train - np.mean(self.Y_train)) ** 2) / self.Y_train.shape[0])
 
         self.root = old_root
         self.X = old_X
@@ -294,12 +292,13 @@ class Tree:
 
         return error_train, error_test
 
+
 class ForestTree:
     def __init__(self, X, Y, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
         self.X = X
         self.Y = Y
         self.N = N
-        if len_sample == None and (criterion == 'gini' or criterion == 'entropy'):
+        if len_sample == None and (criterion_name == 'gini' or criterion_name == 'entropy'):
             self.len_sample = int(math.sqrt(self.X.shape[1]))
             if self.len_sample == 0:
                 self.len_sample = 1
@@ -406,16 +405,6 @@ class ForestTree:
 
         return bootstrap
 
-    def __get_subsample(self, len_sample):
-        # будем сохранять не сами признаки, а их индексы
-        sample_indexes = list(range(len_sample))
-
-        len_subsample = int(np.round(np.sqrt(len_sample)))
-
-        subsample = np.random.choice(sample_indexes, size=len_subsample, replace=False)
-
-        return subsample
-
     def __accuracy_metric(self, actual, predicted):
         correct = 0
         for i in range(len(actual)):
@@ -424,11 +413,9 @@ class ForestTree:
         t = correct / float(len(actual)) * 100.0
         return t
 
-    def __accuracy_metric_mse(self, actual, predicted):
-        return (np.sum((actual - predicted) ** 2)) / len(actual)
-
-    def __accuracy_metric_mae(self, actual, predicted):
-        return np.mean(np.abs(actual - predicted))
+    def __accuracy_metric_r2(self, actual, predicted):
+        return 1 - (np.sum((actual - predicted) ** 2) / actual.shape[0]) \
+                         / (np.sum((actual - np.mean(actual)) ** 2) / actual.shape[0])
 
     def __predict_object(self, obj, node):
         if isinstance(node, Leaf):
@@ -453,7 +440,7 @@ class ForestTree:
         best_t = None
         best_index = None
 
-        feature_subsample_indices = self.__get_subsample(self.len_sample)  # выбираем случайные признаки
+        feature_subsample_indices = np.random.choice(list(range(data.shape[1])), size=self.len_sample, replace=False)
 
         for index in feature_subsample_indices:
             t_values = np.unique(data[:, index])
@@ -467,6 +454,7 @@ class ForestTree:
                     best_gain, best_t, best_index = current_gain, t, index
 
         return best_gain, best_t, best_index
+
     def __build_tree(self, data, labels, classes_or_values, count_tree_depth=0):
         if self.max_tree_depth and count_tree_depth > self.max_tree_depth:
             return Leaf(data, labels, classes_or_values)
@@ -484,7 +472,7 @@ class ForestTree:
 
         return Node(index, t, true_branch, false_branch)
 
-    def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None):
+    def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None, oob=False):
         try:
             if data == None:
                 data = self.X
@@ -531,43 +519,44 @@ class ForestTree:
 
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             accuracy_metric = self.__accuracy_metric
-        elif self.criterion_name == 'mse':
-            accuracy_metric = self.__accuracy_metric_mse
         else:
-            accuracy_metric = self.__accuracy_metric_mae
+            accuracy_metric = self.__accuracy_metric_r2
+
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             classes_or_values = True
         else:
             classes_or_values = False
-        oob_indexs= []
+        oob_indexs = []
         for b_data, b_labels, oob_index in bootstrap:
             tree = self.__build_tree(b_data, b_labels, classes_or_values)
             forest.append(tree)
             oob_indexs.append(oob_index)
 
+        if oob:
+            predicted = []
+            actual = []
+            for i in range(data.shape[0]):
+                temp = []
+                for j, indexs in enumerate(oob_indexs):
+                    for index in indexs:
+                        if i == index:
+                            temp.append(self.__predict(np.array([data[index, :]]), forest[j])[0])
+                            break
+                if len(temp) != 0:
+                    if classes_or_values:
+                        predicted.append(max(set(temp), key=temp.count))
+                    else:
+                        predicted.append(np.mean(temp))
+                    actual.append(labels[i])
 
-        predicted = []
-        actual = []
-        for i in range(data.shape[0]):
-            temp = []
-            for j, indexs in enumerate(oob_indexs):
-                for index in indexs:
-                    if i == index:
-                        temp.append(self.__predict(np.array([data[index, :]]), forest[j])[0])
-                        break
-            if len(temp) != 0:
-                if classes_or_values:
-                    predicted.append(max(set(temp), key=temp.count))
-                else:
-                    predicted.append(np.mean(temp))
-                actual.append(labels[i])
+            oob_value = accuracy_metric(np.array(actual), np.array(predicted))
+            self.forest = forest
+            self.oob_error = oob_value
 
-
-        oob_value = accuracy_metric(np.array(actual), np.array(predicted))
-        self.forest = forest
-        self.oob_error = oob_value
-
-        return forest, oob_value
+            return forest, oob_value
+        else:
+            self.forest = forest
+            return self.forest
 
 
 if __name__ == '__main__':
@@ -578,7 +567,7 @@ if __name__ == '__main__':
     #                                    n_clusters_per_class=1, random_state=3)
     data, labels = make_classification(n_samples=1000, n_features=2, n_informative=2,
                                        n_classes=2, n_redundant=0,
-                                       n_clusters_per_class=1, random_state=23)
+                                       n_clusters_per_class=1, random_state=3)
 
     N = 5
     len_sample = 1
@@ -586,17 +575,16 @@ if __name__ == '__main__':
 
     max_tree_depth = None
 
-
     # def __init__(self, X, Y, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
 
-    foresttree = ForestTree(X=data, Y=labels, N=N,  len_sample=len_sample,
+    foresttree = ForestTree(X=data, Y=labels, N=N, len_sample=len_sample,
                             min_samples_leaf=min_samples_leaf, criterion_name='gini')
 
     # def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None):
 
-    print(foresttree.fit(data=data, labels=labels, n_trees=3, len_sample=2, criterion_name='gini')[1])
-    print(foresttree.fit(data=data, labels=labels, n_trees=3, len_sample=2, criterion_name='entropy')[1])
+    print(foresttree.fit(data=data, labels=labels, n_trees=1, len_sample=2, criterion_name='gini', oob=True))
+    print(foresttree.fit(data=data, labels=labels, n_trees=1, len_sample=2, criterion_name='entropy', oob=True))
 
-    tree = Tree(data, labels,3)
+    tree = Tree(data, labels, 3)
 
     print(tree.accuracy_errors())

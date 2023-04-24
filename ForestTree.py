@@ -215,7 +215,7 @@ class ForestTree:
         best_t = None
         best_index = None
 
-        feature_subsample_indices = self.__get_subsample(self.len_sample)  # выбираем случайные признаки
+        feature_subsample_indices = np.random.choice(list(range(data.shape[1])), size=self.len_sample, replace=False)
 
         for index in feature_subsample_indices:
             t_values = np.unique(data[:, index])
