@@ -400,10 +400,3 @@ class MSE:
         X = np.array(np.c_[self.y, self.data])
         X[:, index + 1] = np.cbrt(X[:, index + 1])
         return X
-
-    def accuracy_metric_classify(self, actual, predicted):
-        correct = 0
-        for i in range(actual.shape[0]):
-            if actual[i] == predicted[i]:
-                correct += 1
-        return correct / float(len(actual)) * 100.0
