@@ -292,6 +292,57 @@ class Tree:
 
         return error_train, error_test
 
+    def __get_meshgrid(self, data, step=.05, border=1.2):
+        x_min, x_max = data[:, 0].min() - border, data[:, 0].max() + border
+        y_min, y_max = data[:, 1].min() - border, data[:, 1].max() + border
+        return np.meshgrid(np.arange(x_min, x_max, step), np.arange(y_min, y_max, step))
+
+    def visualize(self, train_data, test_data, train_labels, test_labels, step=.05, border=1.2):
+        plt.figure(figsize=(16, 7))
+
+        colors = ListedColormap(['red', 'blue'])
+        light_colors = ListedColormap(['lightcoral', 'lightblue'])
+
+        # график обучающей выборки
+        plt.subplot(1, 2, 1)
+        xx, yy = self.__get_meshgrid(train_data, step, border)
+        mesh_predictions = np.array(self.predict(np.c_[xx.ravel(), yy.ravel()], self.root)).reshape(xx.shape)
+        plt.pcolormesh(xx, yy, mesh_predictions, cmap=light_colors)
+        plt.scatter(train_data[:, 0], train_data[:, 1], c=train_labels, cmap=colors)
+        train_accuracy = self.accuracy_metric_classify(train_labels, self.predict(train_data, self.root))
+        plt.title(f'Train accuracy={train_accuracy:.2f}')
+
+        # график тестовой выборки
+        plt.subplot(1, 2, 2)
+        xx, yy = self.__get_meshgrid(test_data, step, border)
+        mesh_predictions = np.array(self.predict(np.c_[xx.ravel(), yy.ravel()], self.root)).reshape(xx.shape)
+        plt.pcolormesh(xx, yy, mesh_predictions, cmap=light_colors)
+        plt.scatter(test_data[:, 0], test_data[:, 1], c=test_labels, cmap=colors)
+        test_accuracy = self.accuracy_metric_classify(test_labels, self.predict(test_data, self.root))
+        plt.title(f'Test accuracy={test_accuracy:.2f}')
+        plt.show()
+
+    def print_tree(self, node, spacing=""):
+
+        # Если лист, то выводим его прогноз
+        if isinstance(node, Leaf):
+            print(spacing + "Прогноз:", node.prediction)
+            return
+
+        print(spacing + 'Индекс', str(node.index), '<=', str(node.t))
+
+        print(spacing + '--> True:')
+        self.print_tree(node.true_branch, spacing + "  ")
+
+        print(spacing + '--> False:')
+        self.print_tree(node.false_branch, spacing + "  ")
+
+    def accuracy_metric_classify(self, actual, predicted):
+        correct = 0
+        for i in range(actual.shape[0]):
+            if actual[i] == predicted[i]:
+                correct += 1
+        return correct / float(len(actual)) * 100.0
 
 class ForestTree:
     def __init__(self, X, Y, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
@@ -515,7 +566,7 @@ class ForestTree:
 
         bootstrap = self.__get_bootstrap(data, labels, n_trees)
 
-        oob_values = []
+
 
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             accuracy_metric = self.__accuracy_metric
@@ -557,7 +608,62 @@ class ForestTree:
         else:
             self.forest = forest
             return self.forest
+    def __get_meshgrid(self, data, step=.05, border=1.2):
+        x_min, x_max = data[:, 0].min() - border, data[:, 0].max() + border
+        y_min, y_max = data[:, 1].min() - border, data[:, 1].max() + border
+        return np.meshgrid(np.arange(x_min, x_max, step), np.arange(y_min, y_max, step))
 
+    def visualize(self, train_data, train_labels, test_data, test_labels):
+        plt.figure(figsize=(16, 7))
+
+        colors = ListedColormap(['red', 'blue'])
+        light_colors = ListedColormap(['lightcoral', 'lightblue'])
+
+        # график обучающей выборки
+        plt.subplot(1, 2, 1)
+        xx, yy = self.__get_meshgrid(train_data)
+        mesh_predictions = np.array(self.predict(np.c_[xx.ravel(), yy.ravel()])).reshape(xx.shape)
+        plt.pcolormesh(xx, yy, mesh_predictions, cmap=light_colors)
+        plt.scatter(train_data[:, 0], train_data[:, 1], c=train_labels, cmap=colors)
+
+        train_accuracy = self.__accuracy_metric_classify(train_labels, self.predict(train_data))
+        plt.title(f'Train accuracy={train_accuracy:.2f}')
+
+        # график тестовой выборки
+        plt.subplot(1, 2, 2)
+        plt.pcolormesh(xx, yy, mesh_predictions, cmap=light_colors)
+        plt.scatter(test_data[:, 0], test_data[:, 1], c=test_labels, cmap=colors)
+
+        test_accuracy = self.__accuracy_metric_classify(test_labels, self.predict(test_data))
+        plt.title(f'Test accuracy={test_accuracy:.2f}')
+
+    def __accuracy_metric_classify(self, actual, predicted):
+        correct = 0
+        for i in range(actual.shape[0]):
+            if actual[i] == predicted[i]:
+                correct += 1
+        return correct / float(len(actual)) * 100.0
+
+    def predict(self, data):
+        # добавим предсказания всех деревьев в список
+        predictions = []
+        for tree in self.forest:
+            predictions.append(self.__predict(data, tree))
+            # print(predictions)
+
+        # сформируем список с предсказаниями для каждого объекта
+        predictions_per_object = list(zip(*predictions))
+        # print(predictions_per_object)
+
+        # выберем в качестве итогового предсказания для каждого объекта то,
+        # за которое проголосовало большинство деревьев
+        voted_predictions = []
+        for obj in predictions_per_object:
+            if self.classes_or_values:
+                voted_predictions.append(max(set(obj), key=obj.count))
+            else:
+                voted_predictions.append(np.mean(np.array(obj)))
+        return voted_predictions
 
 if __name__ == '__main__':
     from sklearn.datasets import make_classification
@@ -582,8 +688,8 @@ if __name__ == '__main__':
 
     # def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None):
 
-    print(foresttree.fit(data=data, labels=labels, n_trees=1, len_sample=2, criterion_name='gini', oob=True))
-    print(foresttree.fit(data=data, labels=labels, n_trees=1, len_sample=2, criterion_name='entropy', oob=True))
+    print(foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=2, criterion_name='gini', oob=True)[1])
+    print(foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=2, criterion_name='entropy', oob=True)[1])
 
     tree = Tree(data, labels, 3)
 
