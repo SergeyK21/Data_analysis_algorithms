@@ -1,10 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import functools
 import math
 from matplotlib.colors import ListedColormap
-
+from tqdm import tqdm
 
 class Node:
 
@@ -139,7 +137,7 @@ class Tree:
         return best_gain, best_t, best_index
 
     def __build_tree(self, data, labels, classes_or_values=True, count_tree_depth=0):
-        if self.max_tree_depth and count_tree_depth > self.max_tree_depth:
+        if self.max_tree_depth and count_tree_depth >= self.max_tree_depth:
             return Leaf(data, labels, classes_or_values)
         count_tree_depth += 1
 
@@ -178,13 +176,17 @@ class Tree:
             for j in range(self.X.shape[1]):
                 self.X[i][j] = (self.X[i][j] - means[j]) / stds[j]
 
-    @functools.lru_cache()
-    def test_train(self, train_proportion: float = 0.7):
+    def test_train(self, data, labels, train_proportion: float = 0.7):
         """
         Перемешивает -> Разделяет на тестовую и тренеровочную выборку
         :param train_proportion: интервалы разбитья от 0 до 1
         :return: self.X_train, self.X_test, self.Y_train, self.Y_test
         """
+
+        self.X = data
+
+        self.Y = labels
+
         np.random.seed(12)
         shuffle_index = np.random.permutation(self.X.shape[0])
         X_shuffled, y_shuffled = self.X[shuffle_index, :], self.Y[shuffle_index]
@@ -239,7 +241,13 @@ class Tree:
         self.root = self.__build_tree(data, labels, classes_or_values)
         return self.root
 
-    def predict(self, data):
+    def predict(self, data, tree=None):
+        if tree != None:
+            preds = []
+            for obj in data:
+                prediction = self.__predict_object(obj, tree)
+                preds.append(prediction)
+            return preds
         preds = []
         for obj in data:
             prediction = self.__predict_object(obj, self.root)
@@ -343,6 +351,7 @@ class Tree:
             if actual[i] == predicted[i]:
                 correct += 1
         return correct / float(len(actual)) * 100.0
+
 
 class ForestTree:
     def __init__(self, X, Y, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
@@ -466,7 +475,7 @@ class ForestTree:
 
     def __accuracy_metric_r2(self, actual, predicted):
         return 1 - (np.sum((actual - predicted) ** 2) / actual.shape[0]) \
-                         / (np.sum((actual - np.mean(actual)) ** 2) / actual.shape[0])
+            / (np.sum((actual - np.mean(actual)) ** 2) / actual.shape[0])
 
     def __predict_object(self, obj, node):
         if isinstance(node, Leaf):
@@ -566,8 +575,6 @@ class ForestTree:
 
         bootstrap = self.__get_bootstrap(data, labels, n_trees)
 
-
-
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             accuracy_metric = self.__accuracy_metric
         else:
@@ -608,6 +615,7 @@ class ForestTree:
         else:
             self.forest = forest
             return self.forest
+
     def __get_meshgrid(self, data, step=.05, border=1.2):
         x_min, x_max = data[:, 0].min() - border, data[:, 0].max() + border
         y_min, y_max = data[:, 1].min() - border, data[:, 1].max() + border
@@ -665,32 +673,191 @@ class ForestTree:
                 voted_predictions.append(np.mean(np.array(obj)))
         return voted_predictions
 
-if __name__ == '__main__':
-    from sklearn.datasets import make_classification
 
+class GBM(Tree):
+    def __init__(self, n_trees, eta, max_tree_depth, X=None, Y=None, min_samples_leaf=1, criterion_name='gini'):
+        super().__init__(X, Y, min_samples_leaf, max_tree_depth, criterion_name)
+        self.n_trees = n_trees
+        self.eta = eta
+        self.trees_list = None
+        self.train_errors = None
+        self.test_errors = None
+
+    def gb_predict(self, X, trees_list):
+        # Реализуемый алгоритм градиентного бустинга будет инициализироваться нулевыми значениями,
+        # поэтому все деревья из списка trees_list уже являются дополнительными и при предсказании
+        # прибавляются с шагом eta
+
+        predictions = np.zeros(X.shape[0])
+        for i, x in enumerate(X):
+            prediction = 0
+            for tree in trees_list:
+                prediction += self.eta * self.predict([x], tree)[0]
+            predictions[i] = prediction
+
+        # predictions = np.array(
+        #     [sum([eta * alg.predict([x])[0] for alg in trees_list]) for x in X]
+        # )
+
+        return predictions
+
+    def __mean_squared_error(self, real, prediction):
+        return (sum((real - prediction) ** 2)) / len(real)
+
+    def __residual(self, y, z):
+        return y - z
+
+    def gb_fit(self, X=None, Y=None, train_proportion: float = 0.7, stop_train_test=False):
+        if not stop_train_test:
+            self.test_train(X, Y, train_proportion=train_proportion)
+
+        # Деревья будем записывать в список
+        trees = []
+
+        # Будем записывать ошибки на обучающей и тестовой выборке на каждой итерации в список
+        train_errors = []
+        test_errors = []
+
+        for i in range(self.n_trees):
+
+            # первый алгоритм просто обучаем на выборке и добавляем в список
+            if len(trees) == 0:
+                # обучаем первое дерево на обучающей выборке
+                tree = self.fit(self.X_train, self.Y_train)
+
+                train_errors.append(self.__mean_squared_error(self.Y_train, self.gb_predict(self.X_train, trees)))
+                test_errors.append(self.__mean_squared_error(self.Y_test, self.gb_predict(self.X_test, trees)))
+            else:
+                # Получим ответы на текущей композиции
+                target = self.gb_predict(self.X_train, trees)
+
+                # алгоритмы начиная со второго обучаем на сдвиг
+                tree = self.fit(self.X_train, self.__residual(self.Y_train, target))
+
+                train_errors.append(self.__mean_squared_error(self.Y_train, self.gb_predict(self.X_train, trees)))
+                test_errors.append(self.__mean_squared_error(self.Y_test, self.gb_predict(self.X_test, trees)))
+
+            trees.append(tree)
+        self.trees_list = trees
+        self.test_errors = test_errors
+        self.train_errors = train_errors
+        return trees, train_errors, test_errors
+
+    def sgb_fit(self, X=None, Y=None, train_proportion: float = 0.7, stop_train_test=False, sample_coef=0.5):
+        if not stop_train_test:
+            self.test_train(X, Y, train_proportion=train_proportion)
+        n_samples = self.X_train.shape[0]
+        # Деревья будем записывать в список
+        trees = []
+
+        # Будем записывать ошибки на обучающей и тестовой выборке на каждой итерации в список
+        train_errors = []
+        test_errors = []
+
+        for i in range(self.n_trees):
+            indices = np.random.randint(0, n_samples, int(n_samples * sample_coef))
+            X_train_sampled, y_train_sampled = self.X_train[indices], self.Y_train[indices]
+
+            # первый алгоритм просто обучаем на выборке и добавляем в список
+            if len(trees) == 0:
+                # обучаем первое дерево на обучающей выборке
+                tree = self.fit(X_train_sampled, y_train_sampled)
+
+                train_errors.append(self.__mean_squared_error(self.Y_train, self.gb_predict(self.X_train, trees)))
+                test_errors.append(self.__mean_squared_error(self.Y_test, self.gb_predict(self.X_test, trees)))
+            else:
+                # Получим ответы на текущей композиции
+                target = self.gb_predict(X_train_sampled, trees)
+
+                # алгоритмы начиная со второго обучаем на сдвиг
+                tree = self.fit(X_train_sampled, self.__residual(y_train_sampled, target))
+
+                train_errors.append(self.__mean_squared_error(self.Y_train, self.gb_predict(self.X_train, trees)))
+                test_errors.append(self.__mean_squared_error(self.Y_test, self.gb_predict(self.X_test, trees)))
+
+            trees.append(tree)
+
+        return trees, train_errors, test_errors
+
+    def evaluate_alg(self):
+        train_prediction = self.gb_predict(self.X_train, self.trees_list)
+
+        print(f'Ошибка алгоритма из {self.n_trees} деревьев глубиной {self.max_tree_depth} \
+        с шагом {self.eta} на тренировочной выборке: {self.__mean_squared_error(self.Y_train, train_prediction)}')
+
+        test_prediction = self.gb_predict(self.X_test, self.trees_list)
+
+        print(f'Ошибка алгоритма из {self.n_trees} деревьев глубиной {self.max_tree_depth} \
+        с шагом {self.eta} на тестовой выборке: {self.__mean_squared_error(self.Y_test, test_prediction)}')
+
+    def get_error_plot(self):
+        plt.xlabel('Iteration number')
+        plt.ylabel('MSE')
+        plt.xlim(0, self.n_trees)
+        plt.plot(list(range(self.n_trees)), self.train_errors, label='train error')
+        plt.plot(list(range(self.n_trees)), self.test_errors, label='test error')
+        plt.legend(loc='upper right')
+        plt.show()
+
+    def plot_different_max_depths(self, max_depths):
+        train_errors_depths = []
+        test_errors_depths = []
+
+        for max_depth in tqdm(max_depths):
+            self.max_tree_depth = max_depth
+            _, train_errors, test_errors = self.gb_fit(stop_train_test=True)
+            train_errors_depths.append(train_errors[-1])
+            test_errors_depths.append(test_errors[-1])
+
+        print(f'Количество деревьев в бустинге {self.n_trees}')
+        plt.plot(range(len(max_depths)), train_errors_depths, label='train_error')
+        plt.plot(range(len(max_depths)), test_errors_depths, label='test_error')
+        plt.xlabel('Глубина дерева')
+        plt.ylabel('MSE')
+        plt.legend()
+        plt.show()
+
+
+
+
+
+if __name__ == '__main__':
+    # from sklearn.datasets import make_classification
+    #
+    # # data, labels = make_classification(n_samples=1000, n_features=2, n_informative=2,
+    # #                                    n_classes=2, n_redundant=0,
+    # #                                    n_clusters_per_class=1, random_state=3)
     # data, labels = make_classification(n_samples=1000, n_features=2, n_informative=2,
     #                                    n_classes=2, n_redundant=0,
     #                                    n_clusters_per_class=1, random_state=3)
-    data, labels = make_classification(n_samples=1000, n_features=2, n_informative=2,
-                                       n_classes=2, n_redundant=0,
-                                       n_clusters_per_class=1, random_state=3)
+    #
+    # N = 5
+    # len_sample = 1
+    # min_samples_leaf = 5
+    #
+    # max_tree_depth = None
+    #
+    # # def __init__(self, X, Y, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
+    #
+    # foresttree = ForestTree(X=data, Y=labels, N=N, len_sample=len_sample,
+    #                         min_samples_leaf=min_samples_leaf, criterion_name='gini')
+    #
+    # # def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None):
+    #
+    # print(foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=2, criterion_name='gini', oob=True)[1])
+    # print(foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=2, criterion_name='entropy', oob=True)[1])
+    #
+    # tree = Tree(data, labels, 3)
+    #
+    # print(tree.accuracy_errors())
+    ###############################################################################################################
+    from sklearn.datasets import load_diabetes
 
-    N = 5
-    len_sample = 1
-    min_samples_leaf = 5
+    X, y = load_diabetes(return_X_y=True)
+    print(X.shape, y.shape)
 
-    max_tree_depth = None
+    temp = GBM(n_trees=50, eta=.1, max_tree_depth=3, min_samples_leaf=5, criterion_name='mse')
 
-    # def __init__(self, X, Y, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
+    temp.gb_fit(X=X, Y=y)
 
-    foresttree = ForestTree(X=data, Y=labels, N=N, len_sample=len_sample,
-                            min_samples_leaf=min_samples_leaf, criterion_name='gini')
-
-    # def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None):
-
-    print(foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=2, criterion_name='gini', oob=True)[1])
-    print(foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=2, criterion_name='entropy', oob=True)[1])
-
-    tree = Tree(data, labels, 3)
-
-    print(tree.accuracy_errors())
+    temp.evaluate_alg()
