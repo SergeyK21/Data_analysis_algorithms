@@ -1,7 +1,5 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import functools
 import math
 from matplotlib.colors import ListedColormap
 
@@ -45,18 +43,21 @@ class Leaf:
 
 
 class Tree:
-    def __init__(self, X, Y, min_samples_leaf=1, max_tree_depth=None, classes_or_values=True,
-                 gini_or_shenon=True, metric_name='mse'):
+    def __init__(self, X, Y, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
         self.X = X
         self.Y = Y
-        self.classes_or_values = classes_or_values
-        self.metric_name = metric_name
-        self.gini_or_shenon = gini_or_shenon
-        # Ограничение минимального количества n объектов в листе.
         self.min_samples_leaf = min_samples_leaf
-        # Ограничение максимальной глубины дерева.
         self.max_tree_depth = max_tree_depth
-        # Корень дерева решений
+        self.criterion_name = criterion_name
+        if criterion_name == 'gini':
+            self.criterion = self.__gini
+        elif criterion_name == 'entropy':
+            self.criterion = self.__entropy
+        elif criterion_name == 'mse':
+            self.criterion = self.__mse_targets
+        else:
+            self.criterion = self.__mae_targets
+
         self.root = None
 
         self.X_test = np.array([])
@@ -64,40 +65,6 @@ class Tree:
         self.X_train = np.array([])
         self.Y_train = np.array([])
 
-    def set_standard_scale(self):
-        """
-        Стандартизация столбца данных
-        :param index: self.data[:, index]
-        :return: None -> меняет значения по адресам слолбца в self.data
-        """
-        means = np.mean(self.X, axis=0)
-        stds = np.std(self.X, axis=0)
-        for i in range(self.X.shape[0]):
-            for j in range(self.X.shape[1]):
-                self.X[i][j] = (self.X[i][j] - means[j]) / stds[j]
-
-    @functools.lru_cache()
-    def test_train(self, train_proportion: float = 0.7):
-        """
-        Перемешивает -> Разделяет на тестовую и тренеровочную выборку
-        :param train_proportion: интервалы разбитья от 0 до 1
-        :return: self.X_train, self.X_test, self.Y_train, self.Y_test
-        """
-        np.random.seed(12)
-        shuffle_index = np.random.permutation(self.X.shape[0])
-        X_shuffled, y_shuffled = self.X[shuffle_index, :], self.Y[shuffle_index]
-        # X_shuffled, y_shuffled = self.data, self.y
-        train_test_cut = int(self.X.shape[0] * train_proportion)
-
-        self.X_train, self.X_test, self.Y_train, self.Y_test = \
-            X_shuffled[:train_test_cut], \
-                X_shuffled[train_test_cut:], \
-                y_shuffled[:train_test_cut], \
-                y_shuffled[train_test_cut:]
-
-        return self.X_train, self.X_test, self.Y_train, self.Y_test
-
-    # Расчет критерия Джини
     def __entropy(self, labels):
 
         classes = {}
@@ -112,7 +79,6 @@ class Tree:
                 impurity += p * math.log2(p)
         return -impurity
 
-    # Расчет критерия Джини
     def __gini(self, labels):
         classes = {}
         for label in labels:
@@ -132,21 +98,11 @@ class Tree:
     def __mae_targets(self, labels):
         return np.mean(np.abs(labels - labels.mean()))
 
-    # Расчет прироста
-    def gain(self, left_labels, right_labels, root_gini):
+    def __gain(self, left_labels, right_labels, root, criterion):
         p = float(left_labels.shape[0]) / (left_labels.shape[0] + right_labels.shape[0])
-        if self.classes_or_values:
-            if self.gini_or_shenon:
-                return root_gini - p * self.__gini(left_labels) - (1 - p) * self.__gini(right_labels)
-            else:
-                return root_gini - p * self.__entropy(left_labels) - (1 - p) * self.__entropy(right_labels)
-        else:
-            if self.metric_name == 'mse':
-                return root_gini - p * self.__mse_targets(left_labels) - (1 - p) * self.__mse_targets(right_labels)
-            else:
-                return root_gini - p * self.__mae_targets(left_labels) - (1 - p) * self.__mae_targets(right_labels)
+        return root - p * criterion(left_labels) - (1 - p) * criterion(right_labels)
 
-    def split(self, data, labels, column_index, t):
+    def __split(self, data, labels, column_index, t):
 
         left = np.where(data[:, column_index] <= t)
         right = np.where(data[:, column_index] > t)
@@ -159,17 +115,8 @@ class Tree:
 
         return true_data, false_data, true_labels, false_labels
 
-    def find_best_split(self, data, labels):
-        if self.classes_or_values:
-            if self.gini_or_shenon:
-                root_gini = self.__gini(labels)
-            else:
-                root_gini = self.__entropy(labels)
-        else:
-            if self.metric_name == 'mse':
-                root_gini = self.__mse_targets(labels)
-            else:
-                root_gini = self.__mae_targets(labels)
+    def __find_best_split(self, data, labels):
+        root = self.criterion(labels)
 
         best_gain = 0
         best_t = None
@@ -181,63 +128,173 @@ class Tree:
             t_values = np.unique(data[:, index])
 
             for t in t_values:
-                true_data, false_data, true_labels, false_labels = self.split(data, labels, index, t)
+                true_data, false_data, true_labels, false_labels = self.__split(data, labels, index, t)
                 if len(true_data) < self.min_samples_leaf or len(false_data) < self.min_samples_leaf:
                     continue
 
-                current_gain = self.gain(true_labels, false_labels, root_gini)
+                current_gain = self.__gain(true_labels, false_labels, root, self.criterion)
 
                 if current_gain > best_gain:
                     best_gain, best_t, best_index = current_gain, t, index
 
         return best_gain, best_t, best_index
 
-    def build_tree(self, data, labels, classes_or_values=True, count_tree_depth=0):
-        if self.max_tree_depth and count_tree_depth > self.max_tree_depth:
+    def __build_tree(self, data, labels, classes_or_values=True, count_tree_depth=0):
+        if self.max_tree_depth and count_tree_depth >= self.max_tree_depth:
             return Leaf(data, labels, classes_or_values)
         count_tree_depth += 1
 
-        gain, t, index = self.find_best_split(data, labels)
+        gain, t, index = self.__find_best_split(data, labels)
 
         if gain == 0:
             return Leaf(data, labels, classes_or_values)
 
-        true_data, false_data, true_labels, false_labels = self.split(data, labels, index, t)
+        true_data, false_data, true_labels, false_labels = self.__split(data, labels, index, t)
 
-        true_branch = self.build_tree(true_data, true_labels, classes_or_values, count_tree_depth)
+        true_branch = self.__build_tree(true_data, true_labels, classes_or_values, count_tree_depth)
 
-        false_branch = self.build_tree(false_data, false_labels, classes_or_values, count_tree_depth)
-        self.root = Node(index, t, true_branch, false_branch)
+        false_branch = self.__build_tree(false_data, false_labels, classes_or_values, count_tree_depth)
+
         return Node(index, t, true_branch, false_branch)
 
-    def classify_object(self, obj, node):
+    def __predict_object(self, obj, node):
         if isinstance(node, Leaf):
             answer = node.prediction
             return answer
 
         if obj[node.index] <= node.t:
-            return self.classify_object(obj, node.true_branch)
+            return self.__predict_object(obj, node.true_branch)
         else:
-            return self.classify_object(obj, node.false_branch)
+            return self.__predict_object(obj, node.false_branch)
 
-    def predict_object(self, obj, node):
-        if isinstance(node, Leaf):
-            answer = node.prediction
-            return answer
+    def set_standard_scale(self):
+        """
+        Стандартизация столбца данных
+        :param index: self.data[:, index]
+        :return: None -> меняет значения по адресам слолбца в self.data
+        """
+        means = np.mean(self.X, axis=0)
+        stds = np.std(self.X, axis=0)
+        for i in range(self.X.shape[0]):
+            for j in range(self.X.shape[1]):
+                self.X[i][j] = (self.X[i][j] - means[j]) / stds[j]
 
-        if obj[node.index] <= node.t:
-            return self.predict_object(obj, node.true_branch)
+    def test_train(self, data, labels, train_proportion: float = 0.7):
+        """
+        Перемешивает -> Разделяет на тестовую и тренеровочную выборку
+        :param train_proportion: интервалы разбитья от 0 до 1
+        :return: self.X_train, self.X_test, self.Y_train, self.Y_test
+        """
+
+        self.X = data
+
+        self.Y = labels
+
+        np.random.seed(12)
+        shuffle_index = np.random.permutation(self.X.shape[0])
+        X_shuffled, y_shuffled = self.X[shuffle_index, :], self.Y[shuffle_index]
+        # X_shuffled, y_shuffled = self.data, self.y
+        train_test_cut = int(self.X.shape[0] * train_proportion)
+
+        self.X_train, self.X_test, self.Y_train, self.Y_test = \
+            X_shuffled[:train_test_cut], \
+                X_shuffled[train_test_cut:], \
+                y_shuffled[:train_test_cut], \
+                y_shuffled[train_test_cut:]
+
+        return self.X_train, self.X_test, self.Y_train, self.Y_test
+
+    def fit(self, data=None, labels=None, min_samples_leaf=None, max_tree_depth=None, criterion_name=None):
+        try:
+            if data == None:
+                data = self.X
+        except ValueError:
+            self.X = data
+
+        try:
+            if labels == None:
+                labels = self.Y
+        except ValueError:
+            self.Y = labels
+
+        if min_samples_leaf:
+            self.min_samples_leaf = min_samples_leaf
+
+        if max_tree_depth:
+            self.max_tree_depth = max_tree_depth
+
+        if criterion_name == None:
+            if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
+                classes_or_values = True
+            else:
+                classes_or_values = False
+        elif criterion_name == 'gini':
+            self.criterion = self.__gini
+            classes_or_values = True
+        elif criterion_name == 'entropy':
+            self.criterion = self.__entropy
+            classes_or_values = True
+        elif criterion_name == 'mse':
+            self.criterion = self.__mse_targets
+            classes_or_values = False
         else:
-            return self.predict_object(obj, node.false_branch)
+            self.criterion = self.__mae_targets
+            classes_or_values = False
 
-    def predict(self, data, tree):
+        self.root = self.__build_tree(data, labels, classes_or_values)
+        return self.root
+
+    def predict(self, data):
         preds = []
         for obj in data:
-            prediction = self.predict_object(obj, tree)
+            prediction = self.__predict_object(obj, self.root)
             preds.append(prediction)
         return preds
 
-    # Визуализируем дерево на графике
+    def __accuracy_metric(self, actual, predicted):
+        correct = 0
+        for i in range(len(actual)):
+            if actual[i] == predicted[i]:
+                correct += 1
+        t = correct / float(len(actual)) * 100.0
+        return t
+
+    def __accuracy_metric_mse(self, actual, predicted):
+        return (np.sum((actual - predicted) ** 2)) / len(actual)
+
+    def __accuracy_metric_mae(self, actual, predicted):
+        return np.mean(np.abs(actual - predicted))
+
+    def accuracy_errors(self, train_proportion: float = 0.7):
+
+        old_root = self.root
+        old_X = self.X
+        old_Y = self.Y
+        self.test_train(self.X, self.Y, train_proportion=train_proportion)
+
+        self.fit(self.X_test, self.Y_test)
+        y_test_pred = self.predict(self.X_test)
+
+        if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
+            error_test = self.__accuracy_metric(self.Y, y_test_pred)
+        else:
+            error_test = 1 - (np.sum((self.Y_test - y_test_pred) ** 2) / self.Y_test.shape[0]) \
+                         / (np.sum((self.Y_test - np.mean(self.Y_test)) ** 2) / self.Y_test.shape[0])
+
+        self.fit(self.X_train, self.Y_train)
+        y_train_pred = self.predict(self.X_train)
+
+        if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
+            error_train = self.__accuracy_metric(self.Y, y_train_pred)
+        else:
+            error_train = 1 - (np.sum((self.Y_train - y_train_pred) ** 2) / self.Y_train.shape[0]) \
+                         / (np.sum((self.Y_train - np.mean(self.Y_train)) ** 2) / self.Y_train.shape[0])
+
+        self.root = old_root
+        self.X = old_X
+        self.Y = old_Y
+
+        return error_train, error_test
 
     def __get_meshgrid(self, data, step=.05, border=1.2):
         x_min, x_max = data[:, 0].min() - border, data[:, 0].max() + border
@@ -290,3 +347,12 @@ class Tree:
             if actual[i] == predicted[i]:
                 correct += 1
         return correct / float(len(actual)) * 100.0
+
+if __name__ == '__main__':
+    from sklearn.datasets import load_diabetes
+
+    X, y = load_diabetes(return_X_y=True)
+    print(X.shape, y.shape)
+    tree = Tree(X, y, min_samples_leaf=3, criterion_name='mse')
+    tree.fit()
+    print(tree.accuracy_errors())

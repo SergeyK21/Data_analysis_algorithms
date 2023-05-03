@@ -4,6 +4,7 @@ import math
 from matplotlib.colors import ListedColormap
 from tqdm import tqdm
 
+
 class Node:
 
     def __init__(self, index, t, true_branch, false_branch):
@@ -269,12 +270,11 @@ class Tree:
         return np.mean(np.abs(actual - predicted))
 
     def accuracy_errors(self, train_proportion: float = 0.7):
-        if self.root:
-            return None
+
         old_root = self.root
         old_X = self.X
         old_Y = self.Y
-        self.test_train(train_proportion)
+        self.test_train(self.X, self.Y, train_proportion=train_proportion)
 
         self.fit(self.X_test, self.Y_test)
         y_test_pred = self.predict(self.X_test)
@@ -291,7 +291,7 @@ class Tree:
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             error_train = self.__accuracy_metric(self.Y, y_train_pred)
         else:
-            error_test = 1 - (np.sum((self.Y_train - y_train_pred) ** 2) / self.Y_train.shape[0]) \
+            error_train = 1 - (np.sum((self.Y_train - y_train_pred) ** 2) / self.Y_train.shape[0]) \
                          / (np.sum((self.Y_train - np.mean(self.Y_train)) ** 2) / self.Y_train.shape[0])
 
         self.root = old_root
@@ -354,19 +354,20 @@ class Tree:
 
 
 class ForestTree:
-    def __init__(self, X, Y, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None, criterion_name='gini'):
+    def __init__(self, X=None, Y=None, N=1, len_sample=None, min_samples_leaf=1, max_tree_depth=None,
+                 criterion_name='gini'):
         self.X = X
         self.Y = Y
         self.N = N
-        if len_sample == None and (criterion_name == 'gini' or criterion_name == 'entropy'):
+        if (self.X or self.Y) and len_sample == None and (criterion_name == 'gini' or criterion_name == 'entropy'):
             self.len_sample = int(math.sqrt(self.X.shape[1]))
             if self.len_sample == 0:
                 self.len_sample = 1
-        elif len_sample == None:
+        elif (self.X or self.Y) and len_sample == None:
             self.len_sample = self.X.shape[1] // 3
             if self.len_sample == 0:
                 self.len_sample = 1
-        elif N < len_sample:
+        elif (self.X or self.Y) and N < len_sample:
             self.len_sample = self.X.shape[1]
         else:
             self.len_sample = len_sample
@@ -388,10 +389,9 @@ class ForestTree:
         self.forest = None
         self.oob_error = None
 
-        self.X_test = np.array([])
-        self.Y_test = np.array([])
-        self.X_train = np.array([])
-        self.Y_train = np.array([])
+        self.X_test = None
+        self.Y_test = None
+        self.X_train = None
 
     def __entropy(self, labels):
         classes = {}
@@ -441,7 +441,7 @@ class ForestTree:
 
         return true_data, false_data, true_labels, false_labels
 
-    def __get_bootstrap(self, data, labels, N):
+    def __get_bootstrap(self, data, labels, N, oob):
         np.random.seed(42)
         n_samples = data.shape[0]  # размер совпадает с исходной выборкой
         bootstrap = []
@@ -450,14 +450,15 @@ class ForestTree:
             sample_index = np.random.randint(0, n_samples, size=n_samples)
             temp = set(sample_index.tolist())
             oob_indexs = []
-            for j in range(n_samples):
-                flag = True
-                for l in temp:
-                    if l == j:
-                        flag = False
-                        break
-                if flag:
-                    oob_indexs.append(j)
+            if oob:
+                for j in range(n_samples):
+                    flag = True
+                    for l in temp:
+                        if l == j:
+                            flag = False
+                            break
+                    if flag:
+                        oob_indexs.append(j)
             b_data = data[sample_index]
             b_labels = labels[sample_index]
 
@@ -516,7 +517,7 @@ class ForestTree:
         return best_gain, best_t, best_index
 
     def __build_tree(self, data, labels, classes_or_values, count_tree_depth=0):
-        if self.max_tree_depth and count_tree_depth > self.max_tree_depth:
+        if self.max_tree_depth and count_tree_depth >= self.max_tree_depth:
             return Leaf(data, labels, classes_or_values)
         count_tree_depth += 1
 
@@ -532,7 +533,8 @@ class ForestTree:
 
         return Node(index, t, true_branch, false_branch)
 
-    def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None, oob=False):
+    def fit(self, data=None, labels=None, n_trees=None, len_sample=None, criterion_name=None, oob=False,
+            min_samples_leaf=None):
         try:
             if data == None:
                 data = self.X
@@ -549,6 +551,9 @@ class ForestTree:
             n_trees = self.N
         else:
             self.N = n_trees
+
+        if min_samples_leaf != None:
+            self.min_samples_leaf = min_samples_leaf
 
         if criterion_name == None:
             self.criterion = self.__gini
@@ -573,7 +578,7 @@ class ForestTree:
 
         forest = []
 
-        bootstrap = self.__get_bootstrap(data, labels, n_trees)
+        bootstrap = self.__get_bootstrap(data, labels, n_trees, oob)
 
         if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
             accuracy_metric = self.__accuracy_metric
@@ -667,7 +672,7 @@ class ForestTree:
         # за которое проголосовало большинство деревьев
         voted_predictions = []
         for obj in predictions_per_object:
-            if self.classes_or_values:
+            if self.criterion_name == 'gini' or self.criterion_name == 'entropy':
                 voted_predictions.append(max(set(obj), key=obj.count))
             else:
                 voted_predictions.append(np.mean(np.array(obj)))
@@ -776,7 +781,9 @@ class GBM(Tree):
                 test_errors.append(self.__mean_squared_error(self.Y_test, self.gb_predict(self.X_test, trees)))
 
             trees.append(tree)
-
+        self.trees_list = trees
+        self.test_errors = test_errors
+        self.train_errors = train_errors
         return trees, train_errors, test_errors
 
     def evaluate_alg(self):
@@ -818,9 +825,6 @@ class GBM(Tree):
         plt.show()
 
 
-
-
-
 if __name__ == '__main__':
     # from sklearn.datasets import make_classification
     #
@@ -858,6 +862,38 @@ if __name__ == '__main__':
 
     temp = GBM(n_trees=50, eta=.1, max_tree_depth=3, min_samples_leaf=5, criterion_name='mse')
 
+    temp.sgb_fit(X=X, Y=y, sample_coef=.1)
+
+    temp.evaluate_alg()
+
     temp.gb_fit(X=X, Y=y)
 
     temp.evaluate_alg()
+
+    from sklearn.datasets import make_classification
+
+    data, labels = make_classification(n_samples=1000, n_features=2, n_informative=2,
+                                       n_classes=2, n_redundant=0,
+                                       n_clusters_per_class=1, random_state=23)
+
+    foresttree = ForestTree()
+    #
+    print('n_trees = 15, foresttree.fit entropy error =',
+          foresttree.fit(data=data, labels=labels, n_trees=15, len_sample=10, criterion_name='entropy',
+                         min_samples_leaf=3,
+                         oob=True)[1])
+    print('n_trees = 15, foresttree.fit gini error =',
+          foresttree.fit(data=data, labels=labels, n_trees=15, len_sample=10, criterion_name='gini', min_samples_leaf=3,
+                         oob=True)[1])
+    print('n_trees = 5, foresttree.fit entropy error =',
+          foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=10, criterion_name='entropy',
+                         min_samples_leaf=3,
+                         oob=True)[1])
+    print('n_trees = 5, foresttree.fit gini error =',
+          foresttree.fit(data=data, labels=labels, n_trees=5, len_sample=10, criterion_name='gini', min_samples_leaf=3,
+                         oob=True)[1])
+
+
+    tree = Tree(X, y, min_samples_leaf=3, criterion_name='mse')
+    tree.fit()
+    print(tree.accuracy_errors())

@@ -114,7 +114,7 @@ class MSE:
         np.random.seed(12)
         shuffle_index = np.random.permutation(self.data.shape[0])
         X_shuffled, y_shuffled = self.data[shuffle_index, :], self.y[shuffle_index]
-        #X_shuffled, y_shuffled = self.data, self.y
+        # X_shuffled, y_shuffled = self.data, self.y
         train_test_cut = int(self.data.shape[0] * train_proportion)
 
         self.X_train, self.X_test, self.Y_train, self.Y_test = \
@@ -202,9 +202,9 @@ class MSE:
         for i, val in enumerate(alpha_list):
             temp = MSE(X_train, Y_train)
             if ridge_or_laso:
-                temp.gradient_descent(0, eta, True, False, val)
+                temp.gradient_descent(eta=eta, l2=True, l1=False, reg=val)
             else:
-                temp.gradient_descent(0, eta, False, True, val)
+                temp.gradient_descent(eta=eta, l2=False, l1=True, reg=val)
             coeffs[i, :] = temp.w
             coef = coeffs[i]
             y_pred_tr = np.dot(X_train, coef)
@@ -228,7 +228,6 @@ class MSE:
         plt.xlabel('alpha')
         plt.ylabel('MSE');
         plt.show()
-
 
     # Визуализируем изменение функционала ошибки
 
@@ -275,7 +274,7 @@ class MSE:
         ax.set_zlabel('Y')
         plt.show()
 
-    def get_coef_cor_Pirson(self, i: int, j: int = 0, X_and_y: bool = True) -> float:
+    def get_coef_cor_Pirson(self, i, j=0, X_and_y=True):
         """
         Коэффициент Пирсона -> (M(xy) - M(x)*M(y)) / (std(x) * std(y))
         :param i:  index -> data[:, i]
